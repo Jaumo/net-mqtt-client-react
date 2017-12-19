@@ -243,20 +243,43 @@ class ReactMqttClient extends EventEmitter
 
         $deferred = new Deferred();
 
+        $resolved = false;
+        $finishDisconnect = function($connection) use ($deferred, &$resolved) {
+            if ($resolved) {
+                return;
+            }
+            $resolved = true;
+            $this->isDisconnecting = false;
+            $this->emit('disconnect', [$connection, $this]);
+            $deferred->resolve($connection);
+        };
+
+        $timer = null;
+        $this->once('close', function($connection) use ($finishDisconnect, &$timer) {
+            if ($timer) {
+                $this->loop->cancelTimer($timer);
+            }
+            $finishDisconnect($connection);
+        });
+
         $this->startFlow(new OutgoingDisconnectFlow($this->connection), true)
-            ->then(function (Connection $connection) use ($deferred) {
-                $this->isDisconnecting = false;
+            ->then(function (Connection $connection) use ($finishDisconnect, &$timer) {
                 $this->isConnected = false;
 
-                $this->emit('disconnect', [$connection, $this]);
-                $deferred->resolve($connection);
-
-                if ($this->stream !== null) {
-                    $this->stream->close();
-                }
+                $timer = $this->loop->addTimer(0.1, function () use ($connection, $finishDisconnect, &$timer) {
+                    $timer = null;
+                    if ($this->stream !== null) {
+                        $finishDisconnect($connection);
+                        $this->stream->close();
+                    }
+                });
             })
-            ->otherwise(function () use ($deferred) {
+            ->otherwise(function () use ($deferred, &$resolved) {
                 $this->isDisconnecting = false;
+                if ($resolved) {
+                    return;
+                }
+                $resolved = true;
                 $deferred->reject($this->connection);
             });
 
@@ -381,7 +404,7 @@ class ReactMqttClient extends EventEmitter
         $timer = $this->loop->addTimer(
             $timeout,
             function () use ($deferred, $timeout) {
-                $exception = new \RuntimeException(sprintf('Connection timed out after %d seconds.', $timeout));
+                $exception = new \RuntimeException(sprintf('Connection timed out after %d seconds (%s:%d)', $timeout, $this->host, $this->port));
                 $deferred->reject($exception);
             }
         );
@@ -427,7 +450,7 @@ class ReactMqttClient extends EventEmitter
         $responseTimer = $this->loop->addTimer(
             $timeout,
             function () use ($deferred, $timeout) {
-                $exception = new \RuntimeException(sprintf('No response after %d seconds.', $timeout));
+                $exception = new \RuntimeException(sprintf('No response after %d seconds (%s:%d).', $timeout, $this->host, $this->port));
                 $deferred->reject($exception);
             }
         );
