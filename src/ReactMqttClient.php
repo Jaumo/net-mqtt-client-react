@@ -459,6 +459,10 @@ class ReactMqttClient extends EventEmitter
             ->always(function () use ($responseTimer) {
                 $this->loop->cancelTimer($responseTimer);
             })->then(function (Connection $connection) use ($deferred) {
+                if ($this->stream === null) {
+                    $deferred->reject(new \RuntimeException("Stream has been closed before client registered"));
+                    return;
+                }
                 $this->timer[] = $this->loop->addPeriodicTimer(
                     floor($connection->getKeepAlive() * 0.75),
                     function () {
